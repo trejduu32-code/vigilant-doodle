@@ -1,7 +1,13 @@
 services:
   - type: web
-    name: url-shortener-auto
+    name: url-shortener
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --workers 4 --threads 4 --timeout 120
+    region: oregon
+    branch: main
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python app.py"
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "10000"
