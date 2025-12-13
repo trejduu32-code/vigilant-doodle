@@ -3,7 +3,7 @@ import sqlite3
 import string
 import random
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 app = Flask(__name__)
 DB_NAME = os.path.join(os.path.dirname(__file__), "urls.db")
@@ -33,16 +33,17 @@ def index():
     if request.method == "POST":
         long_url = request.form["long_url"]
         custom_code = request.form.get("custom_code")
-        expire_days = request.form.get("expire_days")
+        expire_date = request.form.get("expire_date")  # Calendar input
 
         short_code = custom_code if custom_code else generate_short_code()
         expires_at = None
-        if expire_days:
+
+        if expire_date:
             try:
-                days = int(expire_days)
-                expires_at = datetime.now() + timedelta(days=days)
+                # User selects YYYY-MM-DD format
+                expires_at = datetime.strptime(expire_date, "%Y-%m-%d")
             except ValueError:
-                error = "Expiration must be a number of days."
+                error = "Invalid expiration date."
 
         if not error:
             try:
@@ -87,7 +88,8 @@ function copyText(text){ navigator.clipboard.writeText(text); alert("Copied!"); 
 <form method="post">
 <input type="url" name="long_url" placeholder="Enter long URL" required><br>
 <input type="text" name="custom_code" placeholder="Custom code (optional)"><br>
-<input type="number" name="expire_days" placeholder="Expire in days (optional)"><br>
+<label>Expiration Date (optional):</label><br>
+<input type="date" name="expire_date"><br>
 <button type="submit">Shorten</button>
 </form>
 
