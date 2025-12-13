@@ -3,15 +3,12 @@ import sqlite3
 import string
 import random
 import os
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 DB_NAME = os.path.join(os.path.dirname(__file__), "urls.db")
 
-# ------------------------------
-# DATABASE INIT
-# ------------------------------
 def init_db():
-    """Create the database and table if not exists"""
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute("""
         CREATE TABLE IF NOT EXISTS urls (
@@ -19,20 +16,15 @@ def init_db():
             long_url TEXT NOT NULL,
             short_code TEXT UNIQUE NOT NULL,
             clicks INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP
         )
         """)
         conn.commit()
 
-# ------------------------------
-# SHORT CODE GENERATION
-# ------------------------------
 def generate_short_code(length=6):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
-# ------------------------------
-# ROUTES
-# ------------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
     short_url = None
@@ -41,23 +33,32 @@ def index():
     if request.method == "POST":
         long_url = request.form["long_url"]
         custom_code = request.form.get("custom_code")
+        expire_days = request.form.get("expire_days")
+
         short_code = custom_code if custom_code else generate_short_code()
+        expires_at = None
+        if expire_days:
+            try:
+                days = int(expire_days)
+                expires_at = datetime.now() + timedelta(days=days)
+            except ValueError:
+                error = "Expiration must be a number of days."
 
-        try:
-            with sqlite3.connect(DB_NAME) as conn:
-                conn.execute(
-                    "INSERT INTO urls (long_url, short_code) VALUES (?, ?)",
-                    (long_url, short_code)
-                )
-            short_url = request.host_url + short_code
-        except sqlite3.IntegrityError:
-            error = "Custom code already exists."
+        if not error:
+            try:
+                with sqlite3.connect(DB_NAME) as conn:
+                    conn.execute(
+                        "INSERT INTO urls (long_url, short_code, expires_at) VALUES (?, ?, ?)",
+                        (long_url, short_code, expires_at)
+                    )
+                short_url = request.host_url + short_code
+            except sqlite3.IntegrityError:
+                error = "Custom code already exists."
 
-    # Fetch last 10 URLs
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         history = conn.execute(
-            "SELECT short_code, long_url, clicks FROM urls ORDER BY id DESC LIMIT 10"
+            "SELECT short_code, long_url, clicks, expires_at FROM urls ORDER BY id DESC LIMIT 10"
         ).fetchall()
 
     return render_template_string("""
@@ -86,6 +87,7 @@ function copyText(text){ navigator.clipboard.writeText(text); alert("Copied!"); 
 <form method="post">
 <input type="url" name="long_url" placeholder="Enter long URL" required><br>
 <input type="text" name="custom_code" placeholder="Custom code (optional)"><br>
+<input type="number" name="expire_days" placeholder="Expire in days (optional)"><br>
 <button type="submit">Shorten</button>
 </form>
 
@@ -98,12 +100,13 @@ function copyText(text){ navigator.clipboard.writeText(text); alert("Copied!"); 
 
 {% if history %}
 <table>
-<tr><th>Short</th><th>Clicks</th><th>Long URL</th></tr>
+<tr><th>Short</th><th>Clicks</th><th>Long URL</th><th>Expires At</th></tr>
 {% for h in history %}
 <tr>
 <td><a href="/{{ h['short_code'] }}">{{ h['short_code'] }}</a></td>
 <td>{{ h['clicks'] }}</td>
 <td>{{ h['long_url'] }}</td>
+<td>{{ h['expires_at'] if h['expires_at'] else "Never" }}</td>
 </tr>
 {% endfor %}
 </table>
@@ -118,11 +121,14 @@ def redirect_url(short_code):
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT long_url, clicks FROM urls WHERE short_code = ?",
+            "SELECT long_url, clicks, expires_at FROM urls WHERE short_code = ?",
             (short_code,)
         ).fetchone()
 
         if row:
+            if row["expires_at"] and datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S") < datetime.now():
+                return "URL has expired", 404
+
             conn.execute(
                 "UPDATE urls SET clicks = clicks + 1 WHERE short_code = ?",
                 (short_code,)
@@ -132,9 +138,6 @@ def redirect_url(short_code):
 
     return "URL not found", 404
 
-# ------------------------------
-# START
-# ------------------------------
 if __name__ == "__main__":
     init_db()
     port = int(os.environ.get("PORT", 10000))
