@@ -8,16 +8,18 @@ from datetime import datetime
 app = Flask(__name__)
 DB_NAME = os.path.join(os.path.dirname(__file__), "urls.db")
 
+# ---------------- DATABASE ----------------
 def init_db():
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute("""
         CREATE TABLE IF NOT EXISTS urls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             long_url TEXT NOT NULL,
-            short_code TEXT UNIQUE NOT NULL,
+            short_code TEXT NOT NULL,
             clicks INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP
+            expires_at TIMESTAMP,
+            deleted INTEGER DEFAULT 0
         )
         """)
         conn.commit()
@@ -25,6 +27,12 @@ def init_db():
 def generate_short_code(length=6):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
+def is_expired(row):
+    if row["expires_at"]:
+        return datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S") < datetime.now()
+    return False
+
+# ---------------- ROUTES ----------------
 @app.route("/", methods=["GET", "POST"])
 def index():
     short_url = None
@@ -33,112 +41,176 @@ def index():
     if request.method == "POST":
         long_url = request.form["long_url"]
         custom_code = request.form.get("custom_code")
-        expire_date = request.form.get("expire_date")  # Calendar input
+        expire_date = request.form.get("expire_date")
 
         short_code = custom_code if custom_code else generate_short_code()
         expires_at = None
 
         if expire_date:
-            try:
-                # User selects YYYY-MM-DD format
-                expires_at = datetime.strptime(expire_date, "%Y-%m-%d")
-            except ValueError:
-                error = "Invalid expiration date."
+            expires_at = datetime.strptime(expire_date, "%Y-%m-%d")
 
-        if not error:
-            try:
-                with sqlite3.connect(DB_NAME) as conn:
-                    conn.execute(
-                        "INSERT INTO urls (long_url, short_code, expires_at) VALUES (?, ?, ?)",
-                        (long_url, short_code, expires_at)
-                    )
+        with sqlite3.connect(DB_NAME) as conn:
+            conn.row_factory = sqlite3.Row
+            existing = conn.execute(
+                "SELECT * FROM urls WHERE short_code = ?",
+                (short_code,)
+            ).fetchone()
+
+            # 🔁 RECLAIM LOGIC
+            if existing:
+                if existing["deleted"] == 1 or is_expired(existing):
+                    conn.execute("""
+                        UPDATE urls
+                        SET long_url=?, clicks=0, expires_at=?, deleted=0, created_at=CURRENT_TIMESTAMP
+                        WHERE short_code=?
+                    """, (long_url, expires_at, short_code))
+                    conn.commit()
+                    short_url = request.host_url + short_code
+                else:
+                    error = "Short code already in use."
+            else:
+                conn.execute("""
+                    INSERT INTO urls (long_url, short_code, expires_at)
+                    VALUES (?, ?, ?)
+                """, (long_url, short_code, expires_at))
+                conn.commit()
                 short_url = request.host_url + short_code
-            except sqlite3.IntegrityError:
-                error = "Custom code already exists."
 
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
-        history = conn.execute(
-            "SELECT short_code, long_url, clicks, expires_at FROM urls ORDER BY id DESC LIMIT 10"
-        ).fetchall()
+        history = conn.execute("""
+            SELECT * FROM urls
+            ORDER BY id DESC LIMIT 10
+        """).fetchall()
 
     return render_template_string("""
 <!DOCTYPE html>
 <html>
 <head>
-<title>URL Shortener</title>
+<title>URL Shortener by ExploitZ3r0</title>
 <style>
-body { font-family: Arial; background:#0a0a0a; color:#fff; text-align:center; padding:50px; }
-input { width:300px; padding:10px; margin-bottom:10px; }
-button { padding:10px 20px; background:#10b981; border:none; color:#000; cursor:pointer; }
-.result { margin-top:20px; color:#10b981; }
-table { margin-top:20px; width:100%; color:#fff; }
-th, td { padding:6px; text-align:left; word-break:break-all; }
-.error { color:#ef4444; margin-bottom:10px; }
+body {
+    background:#020617;
+    color:#e5e7eb;
+    font-family:Arial;
+    display:flex;
+    justify-content:center;
+    padding:40px;
+}
+.container {
+    width:520px;
+    background:#0f172a;
+    padding:30px;
+    border-radius:14px;
+}
+input, button {
+    width:100%;
+    padding:10px;
+    margin-bottom:10px;
+}
+button {
+    background:#10b981;
+    border:none;
+    font-weight:bold;
+    cursor:pointer;
+}
+.delete {
+    background:#ef4444;
+}
+table {
+    width:100%;
+    font-size:0.85rem;
+}
+td, th {
+    padding:6px;
+    word-break:break-all;
+}
+a { color:#22c55e; }
+.error { color:#ef4444; }
 </style>
-<script>
-function copyText(text){ navigator.clipboard.writeText(text); alert("Copied!"); }
-</script>
 </head>
+
 <body>
-<h1>URL Shortener</h1>
+<div class="container">
+<h1>URL Shortener by ExploitZ3r0</h1>
 
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
 <form method="post">
-<input type="url" name="long_url" placeholder="Enter long URL" required><br>
-<input type="text" name="custom_code" placeholder="Custom code (optional)"><br>
-<label>Expiration Date (optional):</label><br>
-<input type="date" name="expire_date"><br>
+<input type="url" name="long_url" placeholder="Long URL" required>
+<input type="text" name="custom_code" placeholder="Custom code (optional)">
+<label>Expiration date (optional)</label>
+<input type="date" name="expire_date">
 <button type="submit">Shorten</button>
 </form>
 
 {% if short_url %}
-<div class="result">
-<a href="{{ short_url }}" target="_blank">{{ short_url }}</a>
-<button onclick="copyText('{{ short_url }}')">Copy</button>
-</div>
+<p>Short URL: <a href="{{ short_url }}" target="_blank">{{ short_url }}</a></p>
 {% endif %}
 
-{% if history %}
+<h3>History</h3>
 <table>
-<tr><th>Short</th><th>Clicks</th><th>Long URL</th><th>Expires At</th></tr>
+<tr>
+<th>Code</th><th>Clicks</th><th>Status</th><th>Action</th>
+</tr>
 {% for h in history %}
 <tr>
-<td><a href="/{{ h['short_code'] }}">{{ h['short_code'] }}</a></td>
-<td>{{ h['clicks'] }}</td>
-<td>{{ h['long_url'] }}</td>
-<td>{{ h['expires_at'] if h['expires_at'] else "Never" }}</td>
+<td>{{ h.short_code }}</td>
+<td>{{ h.clicks }}</td>
+<td>
+{% if h.deleted %}
+Deleted
+{% elif h.expires_at and h.expires_at < now %}
+Expired
+{% else %}
+Active
+{% endif %}
+</td>
+<td>
+<form method="post" action="/delete/{{ h.short_code }}">
+<button class="delete">Delete</button>
+</form>
+</td>
 </tr>
 {% endfor %}
 </table>
-{% endif %}
 
+</div>
 </body>
 </html>
-""", short_url=short_url, history=history, error=error)
+""", short_url=short_url, history=history, error=error, now=str(datetime.now()))
+
+@app.route("/delete/<short_code>", methods=["POST"])
+def delete_url(short_code):
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute(
+            "UPDATE urls SET deleted=1 WHERE short_code=?",
+            (short_code,)
+        )
+        conn.commit()
+    return redirect("/")
 
 @app.route("/<short_code>")
 def redirect_url(short_code):
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT long_url, clicks, expires_at FROM urls WHERE short_code = ?",
+            "SELECT * FROM urls WHERE short_code=?",
             (short_code,)
         ).fetchone()
 
-        if row:
-            if row["expires_at"] and datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S") < datetime.now():
-                return "URL has expired", 404
+        if not row or row["deleted"]:
+            return "URL not found", 404
 
-            conn.execute(
-                "UPDATE urls SET clicks = clicks + 1 WHERE short_code = ?",
-                (short_code,)
-            )
-            conn.commit()
-            return redirect(row["long_url"])
+        if row["expires_at"] and is_expired(row):
+            return "URL expired", 404
 
-    return "URL not found", 404
+        conn.execute(
+            "UPDATE urls SET clicks = clicks + 1 WHERE short_code=?",
+            (short_code,)
+        )
+        conn.commit()
+        return redirect(row["long_url"])
 
 if __name__ == "__main__":
     init_db()
