@@ -94,7 +94,7 @@ function copyText(text){ navigator.clipboard.writeText(text); alert("Copied!"); 
 </head>
 <body>
 <div class="container">
-<h1>URL Shortener</h1>
+<h1>URL Shortener by ExploitZ3r0</h1>
 
 {% if error %}
 <div class="error">{{ error }}</div>
