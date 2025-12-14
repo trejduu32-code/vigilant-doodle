@@ -184,7 +184,6 @@ a { color:#22c55e; }
 </table>
 
 </div>
-<script src="https://trejduu32-code.github.io/games/bot/exploitz3r0bot.js"></script>
 </body>
 </html>
 """, short_url=short_url, history=history, error=error)
