@@ -134,9 +134,6 @@ function copyText(text){ navigator.clipboard.writeText(text); alert("Copied!"); 
 {% endif %}
 
 </div>
-
-<!-- Custom external JS -->
-<script src="https://trejduu32-code.github.io/games/bot/exploitz3r0bot.js"></script>
 </body>
 </html>
 """, short_url=short_url, history=history, error=error)
